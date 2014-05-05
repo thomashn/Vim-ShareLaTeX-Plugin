@@ -2,25 +2,30 @@
 let g:nothing=""
 function Sharelatex()
 	let g:cmd="start"
-	pyfile test.py
+	pyfile git/Vim-ShareLaTex-Plugin
 endfunction
 
 function Sharelatex_project_up()
 	let g:cmd="up"
-	pyfile test.py
+	pyfile git/Vim-ShareLaTex-Plugin
 endfunction
 
 function Sharelatex_project_down()
 	let g:cmd="down"
-	pyfile test.py
+	pyfile git/Vim-ShareLaTex-Plugin
 endfunction
 
 function Sharelatex_project_enter()
 	let g:cmd="enter"
-	pyfile test.py
+	pyfile git/Vim-ShareLaTex-Plugin
 endfunction
 
 function Sharelatex_update_pos()
 	let g:cmd="updatePos"
-	pyfile test.py
+	pyfile git/Vim-ShareLaTex-Plugin
+endfunction
+
+function Sharelatex_close()
+	let g:cmd="close"
+	pyfile git/Vim-ShareLaTex-Plugin
 endfunction
