@@ -19,11 +19,6 @@ import zmq
 
 import Queue # FIFO
 
-# These two lines enable debugging at httplib level (requests->urllib3->httplib)
-# You will see the REQUEST, including HEADERS and DATA, and RESPONSE with HEADERS but without DATA.
-# The only thing missing will be the response.body which is not logged.
-import httplib
-
 ### General Vim operations
 def vimClearScreen():
 	del(vim.current.buffer[0:len(vim.current.buffer)])
@@ -42,7 +37,6 @@ class SharelatexSession:
 	def __init__(self):
 		self.authenticated = False
 		self.httpHandler = requests.Session()
-		self.wsHandler = None
 		
 	def login(self,email,password):
 		# ??? It is neccessary to get a certificate from the login page
@@ -113,6 +107,7 @@ class VimSharelatexPlugin:
 		self.currentPage = None
 		self.project = None
 		self.lastUpdate = time.time()
+		self.lastBuffer = None
 
 	def showLogin(self):
 		# !!! Implement login screen
@@ -188,9 +183,13 @@ class VimSharelatexPlugin:
 	def openProject(self,projectId):
 		self.project = self.sharelatex.openProject(projectId)
 		self.project.open_root_doc()
+		self.lastBuffer = vim.current.buffer[:]
+		self.test = ""
 
 	def updateProject(self):
 		if None != self.project:
+			#self.localChange()
+			#print self.test
 			currentTime = time.time()
 			if self.lastUpdate + 0.250 < currentTime:
 				(row,column) = vimCursorPos()
@@ -201,15 +200,30 @@ class VimSharelatexPlugin:
 				#vim.current.buffer[:] = self.project.buffer()
 				#self.project.update_cursor_pos()
 
-	def bufferUpdate(self):
-		projectBuffer = self.project.getBuffer()
-		vimClearScreen()
-		for line in projectBuffer:
-			# !!! MUST HANDLE UTF8
-			if len(vim.current.buffer[0])>1:
-				vim.current.buffer.append(str(line))
-			else: 
-				vim.current.buffer[0] = str(line)
+	def localChange(self):
+		changeStartRow = None
+		changeStopRow = None
+		currentBuffer = vim.current.buffer[:]
+		rowDiff = len(currentBuffer) - len(self.lastBuffer)
+
+		if currentBuffer != self.lastBuffer:
+			for row in range(0,len(currentBuffer)-rowDiff,1):
+				if currentBuffer[row][:] != self.lastBuffer[row][:]:
+					changeStartRow = row
+					break	
+			
+			# !!! Ut of range bullshit
+			if changeStartRow != None:
+				for row in range(len(currentBuffer)-1,changeStartRow-rowDiff,-1):
+					if currentBuffer[row][:] != self.lastBuffer[row+rowDiff][:]:
+						changeStopRow = row
+						break
+			
+			self.test = "Start: "+str(changeStartRow)+" Stop: "+str(changeStopRow)+" Diff: "+str(rowDiff)
+
+			self.lastBuffer = currentBuffer[:]
+			
+
 
 # ??? This class provides the interface between
 # ??? Vim and the WebSocket FIFO in com.py. The 
