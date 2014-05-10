@@ -58,6 +58,7 @@ class IPC(threading.Thread):
 		while 1:
 			message = sock.recv_string()
 			if SHUTDOWN:
+				sock.send("DIED")
 				exit()
 			#print "SOCK RECV: "+message
 			if message == "KILL":
@@ -102,7 +103,7 @@ if __name__ == "__main__":
 		sock.send_string(response)
 
 	# ??? Connecting to a websocket session
-	#websocket.enableTrace(True)
+	websocket.enableTrace(True)
 	ws = websocket.create_connection(ws_url)
 	ws_recv = WSPOLL()
 	ws_recv.start()

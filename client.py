@@ -170,14 +170,15 @@ class VimSharelatexPlugin:
 	
 	# ??? Seperate bufferlines with \n
 	def convToString(self,b):
-		if b == None:
+		if b == None or len(b) == 0:
 			return ""
 		changeTo = ""
 		for lines in b[0:len(b)-1]:
-			if lines[len(lines)-1] == " ":
-				lines = lines[len(lines)-2]
 			changeTo += lines +"\n"
+
 		changeTo += b[len(b)-1][:]
+		changeTo.replace("	","\t")
+
 		return changeTo
 
 	def charPos(charNumber):
@@ -200,25 +201,23 @@ class VimSharelatexPlugin:
 
 	def updateProject(self):
 		if None != self.project:
-			print self.test
 			currentTime = time.time()
 			op = self.getOpCodes()
 			if len(op) > 0:
 				message = self.project.sendOperations(op)
 				if message != None:
 					self.project.serverBuffer = vim.current.buffer[:]
-				#self.project.serverBuffer = vim.current.buffer
 
-			if self.lastUpdate + 0.250 < currentTime:
-				self.project.update()
+			self.project.update()
+			if self.lastUpdate + 0.300 < currentTime:
+				#self.project.update()
 				(row,column) = vimCursorPos()
 				self.project.updateCursor(row-1,column)
 				self.lastUpdate = currentTime
-			#self.lastBuffer = vim.current.buffer[:]
 
 	def getOpCodes(self):
-		b = vim.current.buffer
-		a = self.project.serverBuffer
+		b = vim.current.buffer[:]
+		a = self.project.serverBuffer[:]
 		b = self.convToString(b)
 		a = self.convToString(a)
 		op = self.project.decodeOperations(a,b)
@@ -239,10 +238,13 @@ class IPC:
 		self.sock.send_string(message)
 		try:
 			response = self.sock.recv_string()
+			if response == "DIED":
+				exit()
 			#print "SOCKET RECV. "+message
 			return response
 		except:
 			print "SOCKET ERROR"
+			exit()
 
 	def send(self,message):
 		response = self.transmitt(message)	
@@ -298,7 +300,7 @@ class SharelatexProject:
 		# ??? Creating the seperate WebSocket process
 		# !!! Must add dynamic path
 		cmd = ['/usr/bin/python', '/home/thomas/git/Vim-ShareLaTex-Plugin/fifo.py']
-		self.p = sp.Popen(cmd,shell=False)
+		#self.p = sp.Popen(cmd,shell=False)
 		#if self.p.poll() == None :
 		#	print "ALIVE"
 		#	time.sleep(0.5)	
@@ -310,11 +312,11 @@ class SharelatexProject:
 		self.ipc_session.send(url)
 
 		# ??? On a successful connect, the ShareLaTex server sends 1::
-		r = self.ipc_session.waitfor("1::",6)
-		if r != "1::":
-			print "CLIENT: No valid response from ShareLaTex server"
+		#r = self.ipc_session.waitfor("1::",6)
+		#if r != "1::":
+		#	print "CLIENT: No valid response from ShareLaTex server"
 			#self.p.kill()	
-			return
+		#	return
 
 		message = json.dumps({"name":"joinProject","args":[{"project_id":projectID}]})
 		self.send("cmd",message)
@@ -443,11 +445,14 @@ class SharelatexProject:
 				j1 = 0
 			if j2 == 'Null':
 				j2 = 0
+			
+			if len(a) == 0:
+				a = [""]
+			if len(b) == 0:
+				b = [""]
 
 			if tag != "equal":
 				p = i1
-				if p == 'Null':
-					p = 0
 				if tag == "insert":
 					op.append({'p':p,'i':b[j1:j2]})
 				elif tag == "replace":
@@ -455,7 +460,6 @@ class SharelatexProject:
 					op.append({'p':p,'i':b[j1:j2]})
 				elif tag == "delete":
 					op.append({'p':p,'d':a[i1:i2]})
-		
 				
 		return op
 
