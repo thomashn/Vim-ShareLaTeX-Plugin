@@ -46,7 +46,7 @@ class WSPOLL(threading.Thread):
 					ws.send(message)
 				q.put(message)
 			except:
-				print "WSPOLL: ERROR"
+				#print "WSPOLL: ERROR"
 				SHUTDOWN = True
 				exit()
 
@@ -59,7 +59,7 @@ class IPC(threading.Thread):
 			message = sock.recv_string()
 			if SHUTDOWN:
 				exit()
-			print "SOCK RECV: "+message
+			#print "SOCK RECV: "+message
 			if message == "KILL":
 				SHUTDOWN = True
 				exit()
@@ -92,12 +92,12 @@ if __name__ == "__main__":
 	while wait_for_address:
 		ipc_message = sock.recv_string()
 		if str(ipc_message).find('wss://') >= 0:
-			print "SUCCESS"
+			#print "SUCCESS"
 			wait_for_address = False
 			ws_url = ipc_message
 			response = "trying to connect"
 		else:
-			print "ERROR"
+			#print "ERROR"
 			response = "waiting for command"
 		sock.send_string(response)
 

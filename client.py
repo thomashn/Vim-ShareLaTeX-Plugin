@@ -1,13 +1,13 @@
 #!/usr/bin/python
 
 import vim
-import os
+#import os
 import string
 import requests
 #import sys # DEBUG
 from BeautifulSoup import BeautifulSoup
-import websocket
-from websocket import create_connection
+#import websocket
+#from websocket import create_connection
 
 import time
 import json
@@ -16,8 +16,8 @@ import subprocess as sp
 import zmq
 
 #from multiprocessing import Process, Queue
-
 import Queue # FIFO
+import difflib
 
 ### General Vim operations
 def vimClearScreen():
@@ -167,6 +167,18 @@ class VimSharelatexPlugin:
 			char_count += len(line)+1
 		char_count += column
 		return char_count
+	
+	# ??? Seperate bufferlines with \n
+	def convToString(self,b):
+		if b == None:
+			return ""
+		changeTo = ""
+		for lines in b[0:len(b)-1]:
+			if lines[len(lines)-1] == " ":
+				lines = lines[len(lines)-2]
+			changeTo += lines +"\n"
+		changeTo += b[len(b)-1][:]
+		return changeTo
 
 	def charPos(charNumber):
 		counter = 0
@@ -188,42 +200,29 @@ class VimSharelatexPlugin:
 
 	def updateProject(self):
 		if None != self.project:
-			#self.localChange()
-			#print self.test
+			print self.test
 			currentTime = time.time()
+			op = self.getOpCodes()
+			if len(op) > 0:
+				message = self.project.sendOperations(op)
+				if message != None:
+					self.project.serverBuffer = vim.current.buffer[:]
+				#self.project.serverBuffer = vim.current.buffer
+
 			if self.lastUpdate + 0.250 < currentTime:
+				self.project.update()
 				(row,column) = vimCursorPos()
 				self.project.updateCursor(row-1,column)
-				self.project.update()
-				#self.bufferUpdate()
 				self.lastUpdate = currentTime
-				#vim.current.buffer[:] = self.project.buffer()
-				#self.project.update_cursor_pos()
+			#self.lastBuffer = vim.current.buffer[:]
 
-	def localChange(self):
-		changeStartRow = None
-		changeStopRow = None
-		currentBuffer = vim.current.buffer[:]
-		rowDiff = len(currentBuffer) - len(self.lastBuffer)
-
-		if currentBuffer != self.lastBuffer:
-			for row in range(0,len(currentBuffer)-rowDiff,1):
-				if currentBuffer[row][:] != self.lastBuffer[row][:]:
-					changeStartRow = row
-					break	
-			
-			# !!! Ut of range bullshit
-			if changeStartRow != None:
-				for row in range(len(currentBuffer)-1,changeStartRow-rowDiff,-1):
-					if currentBuffer[row][:] != self.lastBuffer[row+rowDiff][:]:
-						changeStopRow = row
-						break
-			
-			self.test = "Start: "+str(changeStartRow)+" Stop: "+str(changeStopRow)+" Diff: "+str(rowDiff)
-
-			self.lastBuffer = currentBuffer[:]
-			
-
+	def getOpCodes(self):
+		b = vim.current.buffer
+		a = self.project.serverBuffer
+		b = self.convToString(b)
+		a = self.convToString(a)
+		op = self.project.decodeOperations(a,b)
+		return op
 
 # ??? This class provides the interface between
 # ??? Vim and the WebSocket FIFO in com.py. The 
@@ -279,28 +278,27 @@ class IPC:
 				queue.put(response)
 
 class Document:
-	def __init__(self,unique_id):
-		self.unique_id = unique_id
+	def __init__(self,uniqueID):
+		self.uniqueID = uniqueID
+		self.lastCommit = None
 		self.version = None
 
 class SharelatexProject:
-	def __init__(self,url,project_id):
+	def __init__(self,url,projectID):
 		
 		# ??? Defining usefull variables
-		self.current_doc = None
-		self.root_doc_id = None
+		self.projectID = projectID
+		self.currentDoc = None
+		self.rootDoc = None
 		self.last_update = 0
 		self.counter = 0
 		self.command_counter = 0
-		self.last_vim_buffer = None
-		self.last_buffer_change = ""
-		
-		self.projectBuffer = None
+		self.serverBuffer = None
 
 		# ??? Creating the seperate WebSocket process
 		# !!! Must add dynamic path
-		cmd = ['/usr/bin/python', '/home/thomas/com.py']
-		#self.p = sp.Popen(cmd,shell=False)
+		cmd = ['/usr/bin/python', '/home/thomas/git/Vim-ShareLaTex-Plugin/fifo.py']
+		self.p = sp.Popen(cmd,shell=False)
 		#if self.p.poll() == None :
 		#	print "ALIVE"
 		#	time.sleep(0.5)	
@@ -313,19 +311,17 @@ class SharelatexProject:
 
 		# ??? On a successful connect, the ShareLaTex server sends 1::
 		r = self.ipc_session.waitfor("1::",6)
-		if r < 0:
+		if r != "1::":
 			print "CLIENT: No valid response from ShareLaTex server"
 			#self.p.kill()	
 			return
 
-		temp = json.dumps({"name":"joinProject","args":[{"project_id":project_id}]})
-		self.send("cmd",temp)
-		r = self.ipc_session.waitfor("::")
-		r = str(r)
+		message = json.dumps({"name":"joinProject","args":[{"project_id":projectID}]})
+		self.send("cmd",message)
+		r = str(self.ipc_session.waitfor("6:::1+"))
 		temp = json.loads(r[r.find("+")+1:len(r)])	
 		data = temp[1]
-		self.root_doc_id = data.get(u'rootDoc_id') 
-		
+		self.rootDoc = data.get(u'rootDoc_id') 
 
 	def send(self,message_type,message_content=None):
 		if message_type == "update":
@@ -336,36 +332,35 @@ class SharelatexProject:
 		elif message_type == "alive":
 			self.ipc_session.send("2::")
 	
-	def open_doc(self,doc_id):
-		if self.current_doc != None:
-			temp = json.dumps({"name":"leaveDoc","args":[self.current_doc.unique_id]})
+	def openDoc(self,docID):
+		if self.currentDoc != None:
+			temp = json.dumps({"name":"leaveDoc","args":[self.currentDoc.uniqueID]})
 			self.send("cmd",temp)
 		
-		self.current_doc = Document(doc_id)
+		self.currentDoc = Document(docID)
 			
-		temp = json.dumps({"name":"joinDoc","args":[doc_id]})
+		temp = json.dumps({"name":"joinDoc","args":[docID]})
 		self.send("cmd",temp)
-		r = self.ipc_session.waitfor("::")
+		r = str(self.ipc_session.waitfor("::"))
 		
-		temp = json.loads(r[str(r).find("+")+1:len(str(r))])	
+		temp = json.loads(r[r.find("+")+1:len(r)])	
 		data = temp[1]
 
-		self.projectBuffer = data
-		self.current_doc.version = temp[2]
+		self.serverBuffer = data[:]
+		self.currentDoc.version = temp[2]
 
 		vimClearScreen()
 
 		# ??? Pushing document to vim
 		vim.command("syntax on")
 		vim.command("set filetype=tex")
-		for a in self.projectBuffer:
+		for a in self.serverBuffer:
 			# !!! MUST HANDLE UTF8
 			if len(vim.current.buffer[0])>1:
 				vim.current.buffer.append(str(a))
 			else: 
 				vim.current.buffer[0] = str(a)
 
-		self.last_vim_buffer = vim.current.buffer[:]
 
 		# ??? Returning normal function to these buttons	
 		vim.command("nmap <silent> <up> <up>")
@@ -376,47 +371,10 @@ class SharelatexProject:
 		vim.command("autocmd CursorHold,CursorHoldI * :call Sharelatex_update_pos()")
 
 	def open_root_doc(self):
-		if self.root_doc_id != None:
-			self.open_doc(self.root_doc_id)
+		if self.rootDoc != None:
+			self.openDoc(self.rootDoc)
 
-	def get_cursor_pos(self):
-		window = vim.current.window
-		(row,column) = window.cursor 
-		row -= 1
-		return (row,column)
 	
-	def updateCursor(self,row,column):
-		message = json.dumps({
-			"name":"clientTracking.updatePosition",
-			"args":[{
-				"row":row,
-				"column":column,
-				"doc_id":self.current_doc.unique_id
-				}]
-			})
-		self.send("update",message)
-
-
-	def update_cursor_pos(self):
-		(row,column) = self.get_cursor_pos()
-		
-		#print self.get_char_number(row,column)
-		self.find_local_change()
-
-		print str(self.last_buffer_change)
-		self.counter += 1
-		if self.last_update + 0.250 < time.time():
-			temp = json.dumps({"name":"clientTracking.updatePosition","args":[{"row":row,"column":column,"doc_id":self.current_doc.unique_id}]})
-			self.send("update",temp)
-			self.update()
-			self.last_update = time.time()
-			#vim.command("wincmd w")
-			#vim.command("wincmd p")
-			#vim.command("call feedkeys('f\e')")
-
-	def update_clients(self):
-		return None
-
 	def get_char_number(self,row,column):
 		char_count = 0
 		for line in vim.current.buffer[:row]:
@@ -436,35 +394,84 @@ class SharelatexProject:
 			# ??? Extra column for every newline
 			counter += 1
 
-	# ??? This part of the code is taken from the CoVim project
-	def find_local_change(self):
-		current_buffer = vim.current.buffer[:]
-		if current_buffer != self.last_vim_buffer:
-			cursor_y = vim.current.window.cursor[0] - 1
-			cursor_x = vim.current.window.cursor[1]
-			change_y = len(current_buffer) - len(self.last_vim_buffer)
-			change_x = 0
+	def updateCursor(self,row,column):
+		message = json.dumps({
+			"name":"clientTracking.updatePosition",
+			"args":[{
+				"row":row,
+				"column":column,
+				"doc_id":self.currentDoc.uniqueID
+				}]
+			})
+		self.send("update",message)
+	
+	def updateClients(self):
+		return None
 
-			if len(self.last_vim_buffer) > cursor_y-change_y and cursor_y-change_y >= 0 and len(current_buffer) > cursor_y and cursor_y >= 0:
-				change_x = len(current_buffer[cursor_y]) - len(self.last_vim_buffer[cursor_y-change_y])
+	def sendOperations(self,op):
+		if len(op) > 0:
+			version = self.currentDoc.version
+			if version > self.currentDoc.lastCommit:
+				message = json.dumps({
+					"name":"applyOtUpdate",
+					"args":[
+						self.currentDoc.uniqueID,
+						{
+						"doc":self.currentDoc.uniqueID,
+						"op":op,
+						"v":version
+						}
+						]
+					})
+				self.send("update",message)
+				self.currentDoc.lastCommit = version
+				return message
+			return None
+
+	def decodeOperations(self,a,b):
+		s = difflib.SequenceMatcher(None,a,b)
+		deletes = 0
+		inserts = 0
+		p = None
+		op = []
+		for tag, i1, i2, j1, j2 in s.get_opcodes():
+			if i1 == 'Null':
+				i1 = 0
+			if i2 == 'Null':
+				i2 = 0
+			if j1 == 'Null':
+				j1 = 0
+			if j2 == 'Null':
+				j2 = 0
+
+			if tag != "equal":
+				p = i1
+				if p == 'Null':
+					p = 0
+				if tag == "insert":
+					op.append({'p':p,'i':b[j1:j2]})
+				elif tag == "replace":
+					op.append({'p':p,'d':a[i1:i2]})
+					op.append({'p':p,'i':b[j1:j2]})
+				elif tag == "delete":
+					op.append({'p':p,'d':a[i1:i2]})
+		
 				
-			limits = {'from': max(0, cursor_y-abs(change_y)),'to': min(len(vim.current.buffer)-1, cursor_y+abs(change_y))}
-			buffer_change = vim.current.buffer[limits['from']:limits['to']+1]
-			self.last_buffer_change = change_x
-			if change_x > 0:
-				version = self.current_doc.version
-				temp = json.dumps({"name":"applyOtUpdate","args":[self.current_doc.unique_id,{"doc":self.current_doc.unique_id,"op":[{"p":32,"i":"a"}],"v":version}]})
-				self.send("update",temp)
-			self.last_vim_buffer = current_buffer
+		return op
 
-	def getBuffer(self):
-		return self.projectBuffer
-	
-	def modify_document(self,args):
+	def applyOperations(self,args,buf):
 		args = args[0]
+
+		if u'v' in args:
+			v = args[u'v']
+			if v >= self.currentDoc.version:
+				self.currentDoc.version = v+1
+				#self.serverBuffer = vim.current.buffer[:]
+
+		if not u'op' in args:
+			return buf
 		op = args[u'op']
-		buf = vim.current.buffer
-	
+
 		for op in op:
 			# ??? Del char and lines
 			if u'd' in op:
@@ -516,9 +523,8 @@ class SharelatexProject:
 					buf[row:] = insertBuffer[:] + buf[row+1:]
 				else:
 					buf[row] = beforeInsert + s + afterInsert
-		
-		vim.current.buffer = buf
-		return
+
+		return buf
 
 	# ??? Packets containing external updates
 	# ??? are filtered and handled here
@@ -531,15 +537,16 @@ class SharelatexProject:
 				data = json.loads(r[r.find("5:::")+4:len(r)])
 				action = data[u'name']
 				if action == "clientTracking.clientUpdated":
-					self.update_clients()
+					self.updateClients()
 				elif action == "otUpdateApplied":
 					args = data[u'args']
 					if u'v' in data:
 						version = data[u'v']
-						if version > self.current_doc.version:
-							self.current_doc.version = version
-					self.modify_document(args)
-					#self.modifyBuffer(args)
+						if version >= self.currentDoc.version:
+							self.currentDoc.version = version+1
+							#self.serverBuffer = vim.current.buffer[:]
+					self.serverBuffer = self.applyOperations(args,self.serverBuffer)
+					vim.current.buffer[:] = self.applyOperations(args,vim.current.buffer[:])
 
 	def get_documents():
 		# ??? Getting all the documents
@@ -548,34 +555,6 @@ class SharelatexProject:
 		#r = ws_session.recv()
 		#temp = json.loads(r[r.find("+")+1:len(r)])	
 		#data = temp[1]
-		# !!! Printing results in error
-		#print data	
-
-def open_project(id_value):
-	global http_session
-
-	global ws_session
-	ws_session = ProjectHandler(http_session,id_value)
-
-	# ??? Getting the root document
-	ws_session.open_root_doc()
-
-# ??? This function is used to navigate up and down the project menu
-# ??? and to enter the projects loading its project page or whatever.
-def navigate_projects(direction):
-	global project_list
-
-	w = vim.current.window
-	(v,h) = w.cursor
-	if direction == "up" and v !=6:
-		v -= 3
-	elif direction == "down" and v < (len(vim.current.buffer)-3):
-		v += 3
-	w.cursor = (v,h)
-
-	if direction == "enter":
-		open_project(project_list[(v-6)/3])
-
 
 
 cmd = vim.eval("g:cmd")
@@ -583,20 +562,14 @@ if cmd=="start":
 	plugin = VimSharelatexPlugin()
 	plugin.enterLogin()
 	plugin.showProjects()
-	#show_projects()
 elif cmd=="up":
 	plugin.navigateProjects("up")
-	#navigate_projects("up")
 elif cmd=="down":
 	plugin.navigateProjects("down")
-	#navigate_projects("down")
 elif cmd=="enter":
 	plugin.navigateProjects("enter")
-	#navigate_projects("enter")
 elif cmd=="updatePos":
 	plugin.updateProject()
-
-	#ws_session.update_cursor_pos()
 elif cmd=="close":
 	plugin.project.ipc_session.kill()
 	print "ENDTIME"
