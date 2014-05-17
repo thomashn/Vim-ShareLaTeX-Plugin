@@ -39,7 +39,7 @@ class WSPOLL(threading.Thread):
 		global SHUTDOWN
 		while 1 :
 			try:
-				message = ws.recv()
+				message = ws.recv().decode('utf-8')
 				if SHUTDOWN:
 					exit()
 				if message == "2::":
@@ -92,7 +92,7 @@ if __name__ == "__main__":
 	# ??? process.
 	while wait_for_address:
 		ipc_message = sock.recv_string()
-		if str(ipc_message).find('wss://') >= 0:
+		if ipc_message.find('wss://') >= 0:
 			#print "SUCCESS"
 			wait_for_address = False
 			ws_url = ipc_message
@@ -103,7 +103,7 @@ if __name__ == "__main__":
 		sock.send_string(response)
 
 	# ??? Connecting to a websocket session
-	websocket.enableTrace(True)
+	#websocket.enableTrace(True)
 	ws = websocket.create_connection(ws_url)
 	ws_recv = WSPOLL()
 	ws_recv.start()

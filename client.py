@@ -39,16 +39,19 @@ class SharelatexSession:
 		self.httpHandler = requests.Session()
 		
 	def login(self,email,password):
-		# ??? It is neccessary to get a certificate from the login page
-		certPage = self.httpHandler.get("https://www.sharelatex.com/login")
-		certPos = certPage.text.find("_csrf")
-		certString = certPage.text[certPos+28:certPos+52]
-		# ??? Filling out the login form
-		formData = {'email': email, 'password': password, '_csrf':certString,'redir':''}
-		redirect  = self.httpHandler.post("https://www.sharelatex.com/login", data=formData)
-		if redirect.text == '{"redir":"/project"}':
-			self.authenticated = True
-			return True
+		if not self.authenticated:
+			# ??? It is neccessary to get a certificate from the login page
+			certPage = self.httpHandler.get("https://www.sharelatex.com/login")
+			certPos = certPage.text.find("_csrf")
+			certString = certPage.text[certPos+28:certPos+52]
+			# ??? Filling out the login form
+			formData = {'email': email, 'password': password, '_csrf':certString,'redir':''}
+			redirect  = self.httpHandler.post("https://www.sharelatex.com/login", data=formData)
+			if redirect.text == '{"redir":"/project"}':
+				self.authenticated = True
+				return True
+			else:
+				return False
 		else:
 			return False
 
@@ -63,7 +66,7 @@ class SharelatexSession:
 			newList = []
 
 			for entry in projectEntries:
-				# ??? Getting the project name
+				# ??? Filtering name, id etc. for each individual project
 				entryName = entry.find("a",attrs={'class':'projectName'}).getText()
 				entryId = entry.get('id')
 				entryInfo = entry.findAll("span")
@@ -78,7 +81,8 @@ class SharelatexSession:
 					'owner':entryOwner})
 			
 			return newList
-
+	
+	# ??? Generate a timstamp with a length of 13 numbers
 	def genTimeStamp(self):
 		t = time.time()
 		t = str(t)
@@ -97,7 +101,7 @@ class SharelatexSession:
 			# ??? the client must query for a sec url
 			channelInfo = self.httpHandler.get("https://www.sharelatex.com/socket.io/1/?t="+timestamp)
 			wsChannel = channelInfo.text[0:channelInfo.text.find(":")]
-			wsUrl = "wss://www.sharelatex.com/socket.io/1/websocket/"+wsChannel
+			wsUrl = u"wss://www.sharelatex.com/socket.io/1/websocket/"+wsChannel
 			return SharelatexProject(wsUrl,projectId)
 
 ### Handles everything Vim spesific
@@ -171,15 +175,22 @@ class VimSharelatexPlugin:
 	# ??? Seperate bufferlines with \n
 	def convToString(self,b):
 		if b == None or len(b) == 0:
-			return ""
-		changeTo = ""
+			return u''
+		changeTo = u''
 		for lines in b[0:len(b)-1]:
-			changeTo += lines +"\n"
+			changeTo += u''+lines +"\n"
 
-		changeTo += b[len(b)-1][:]
+		changeTo += u''+b[len(b)-1]
 		changeTo.replace("	","\t")
 
 		return changeTo
+
+	def applyString(self,b):
+		buf = []
+		b = b.replace('\t',"	")
+		buf = b.split('\n')
+
+		vim.current.buffer[0:] = buf[:]
 
 	def charPos(charNumber):
 		counter = 0
@@ -196,19 +207,23 @@ class VimSharelatexPlugin:
 	def openProject(self,projectId):
 		self.project = self.sharelatex.openProject(projectId)
 		self.project.open_root_doc()
-		self.lastBuffer = vim.current.buffer[:]
-		self.test = ""
+		self.project.serverBuffer = self.convToString(vim.current.buffer)
+		#self.test = 1
 
 	def updateProject(self):
 		if None != self.project:
 			currentTime = time.time()
+
+			buf = self.convToString(vim.current.buffer)
+			buf = self.project.update(buf)
+			self.applyString(buf)
+			#print str(self.test)
 			op = self.getOpCodes()
 			if len(op) > 0:
 				message = self.project.sendOperations(op)
 				if message != None:
-					self.project.serverBuffer = vim.current.buffer[:]
-
-			self.project.update()
+					#self.project.serverBuffer[:] = vim.current.buffer[:]
+					self.project.serverBuffer = self.convToString(vim.current.buffer)
 			if self.lastUpdate + 0.300 < currentTime:
 				#self.project.update()
 				(row,column) = vimCursorPos()
@@ -216,10 +231,10 @@ class VimSharelatexPlugin:
 				self.lastUpdate = currentTime
 
 	def getOpCodes(self):
-		b = vim.current.buffer[:]
-		a = self.project.serverBuffer[:]
+		b = vim.current.buffer
+		a = self.project.serverBuffer
 		b = self.convToString(b)
-		a = self.convToString(a)
+		#a = self.convToString(a)
 		op = self.project.decodeOperations(a,b)
 		return op
 
@@ -256,7 +271,7 @@ class IPC:
 			response = self.transmitt()
 			return response
 		else:
-			return str(self.q.get())
+			return self.q.get()
 
 	def kill(self):
 		self.sock.send_string("KILL")
@@ -265,7 +280,7 @@ class IPC:
 		try_count = 0
 		while try_count < try_times:
 			response = self.recv()
-			if str(response).find(codeword)>=0:
+			if response.find(codeword)>=0:
 				return response
 			try_count += 1
 			time.sleep(0.250)
@@ -300,10 +315,10 @@ class SharelatexProject:
 		# ??? Creating the seperate WebSocket process
 		# !!! Must add dynamic path
 		cmd = ['/usr/bin/python', '/home/thomas/git/Vim-ShareLaTex-Plugin/fifo.py']
-		#self.p = sp.Popen(cmd,shell=False)
-		#if self.p.poll() == None :
-		#	print "ALIVE"
-		#	time.sleep(0.5)	
+		self.p = sp.Popen(cmd,shell=False)
+		if self.p.poll() == None :
+			print "ALIVE"
+			time.sleep(0.5)	
 
 		# ??? Establishing a communication channel
 		self.ipc_session = IPC("8080")
@@ -312,15 +327,15 @@ class SharelatexProject:
 		self.ipc_session.send(url)
 
 		# ??? On a successful connect, the ShareLaTex server sends 1::
-		#r = self.ipc_session.waitfor("1::",6)
-		#if r != "1::":
-		#	print "CLIENT: No valid response from ShareLaTex server"
+		r = self.ipc_session.waitfor("1::",10)
+		if r != "1::":
+			print "CLIENT: No valid response from ShareLaTex server"
 			#self.p.kill()	
-		#	return
+			return
 
 		message = json.dumps({"name":"joinProject","args":[{"project_id":projectID}]})
 		self.send("cmd",message)
-		r = str(self.ipc_session.waitfor("6:::1+"))
+		r = self.ipc_session.waitfor("6:::1+")
 		temp = json.loads(r[r.find("+")+1:len(r)])	
 		data = temp[1]
 		self.rootDoc = data.get(u'rootDoc_id') 
@@ -343,12 +358,12 @@ class SharelatexProject:
 			
 		temp = json.dumps({"name":"joinDoc","args":[docID]})
 		self.send("cmd",temp)
-		r = str(self.ipc_session.waitfor("::"))
+		r = self.ipc_session.waitfor("::")
 		
 		temp = json.loads(r[r.find("+")+1:len(r)])	
 		data = temp[1]
 
-		self.serverBuffer = data[:]
+		self.serverBuffer = data
 		self.currentDoc.version = temp[2]
 
 		vimClearScreen()
@@ -359,9 +374,9 @@ class SharelatexProject:
 		for a in self.serverBuffer:
 			# !!! MUST HANDLE UTF8
 			if len(vim.current.buffer[0])>1:
-				vim.current.buffer.append(str(a))
+				vim.current.buffer.append(a)
 			else: 
-				vim.current.buffer[0] = str(a)
+				vim.current.buffer[0] = a
 
 
 		# ??? Returning normal function to these buttons	
@@ -431,6 +446,16 @@ class SharelatexProject:
 			return None
 
 	def decodeOperations(self,a,b):
+		#changeStart = None
+		#changeStop = None
+		#for i in range(0,len(a)):
+		#	if a[i] != b[i]:
+		#		changeStart = i
+		#		break
+
+		#if changeStart != None:
+		#	for i in range(
+		
 		s = difflib.SequenceMatcher(None,a,b)
 		deletes = 0
 		inserts = 0
@@ -530,9 +555,37 @@ class SharelatexProject:
 
 		return buf
 
+
+	def applyOperationsString(self,args,buf):
+		args = args[0]
+
+		if u'v' in args:
+			v = args[u'v']
+			if v >= self.currentDoc.version:
+				self.currentDoc.version = v+1
+
+		if not u'op' in args:
+			return buf
+		op = args[u'op']
+
+		for op in op:
+			# ??? Del char and lines
+			if u'd' in op:
+				p = op[u'p']
+				s = op[u'd']
+		
+				buf = buf[:p] + buf[p+len(s):]
+			# ??? Add chars and newlines
+			if u'i' in op:
+				p = op[u'p']
+				s = op[u'i']
+			
+				buf = buf[:p] + s + buf[p:]
+		return buf
+
 	# ??? Packets containing external updates
 	# ??? are filtered and handled here
-	def update(self):
+	def update(self,editorBuffer):
 		q = Queue.Queue()
 		self.ipc_session.EmptyInto(q)
 		while not q.empty():
@@ -549,8 +602,12 @@ class SharelatexProject:
 						if version >= self.currentDoc.version:
 							self.currentDoc.version = version+1
 							#self.serverBuffer = vim.current.buffer[:]
-					self.serverBuffer = self.applyOperations(args,self.serverBuffer)
-					vim.current.buffer[:] = self.applyOperations(args,vim.current.buffer[:])
+					#self.serverBuffer = self.applyOperations(args,self.serverBuffer)
+					self.serverBuffer = self.applyOperationsString(args,self.serverBuffer)
+					#vim.current.buffer = self.applyOperations(args,vim.current.buffer)
+					editorBuffer = self.applyOperationsString(args,editorBuffer)
+
+		return editorBuffer
 
 	def get_documents():
 		# ??? Getting all the documents
