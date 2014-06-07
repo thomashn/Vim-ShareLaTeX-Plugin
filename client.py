@@ -99,6 +99,7 @@ class SharelatexSession:
 
 			# ??? To establish a websocket connection
 			# ??? the client must query for a sec url
+			self.httpHandler.get("https://www.sharelatex.com/project")
 			channelInfo = self.httpHandler.get("https://www.sharelatex.com/socket.io/1/?t="+timestamp)
 			wsChannel = channelInfo.text[0:channelInfo.text.find(":")]
 			wsUrl = u"wss://www.sharelatex.com/socket.io/1/websocket/"+wsChannel
@@ -185,12 +186,11 @@ class VimSharelatexPlugin:
 
 		return changeTo
 
-	def applyString(self,b):
-		buf = []
-		b = b.replace('\t',"	")
-		buf = b.split('\n')
-
-		vim.current.buffer[0:] = buf[:]
+	def applyString(self,s):
+		b = []
+		s = s.replace('\t',"	")
+		b = s.split('\n')
+		vim.current.buffer[0:] = b[0:]
 
 	def charPos(charNumber):
 		counter = 0
@@ -206,36 +206,48 @@ class VimSharelatexPlugin:
 
 	def openProject(self,projectId):
 		self.project = self.sharelatex.openProject(projectId)
-		self.project.open_root_doc()
-		self.project.serverBuffer = self.convToString(vim.current.buffer)
+		serverBuffer = self.project.open_root_doc()
+
+		vimClearScreen()
+
+		# ??? Pushing document to vim
+		vim.command("syntax on")
+		vim.command("set filetype=tex")
+		
+		self.applyString(serverBuffer)
+		
+		# ??? Returning normal function to these buttons	
+		vim.command("nmap <silent> <up> <up>")
+		vim.command("nmap <silent> <down> <down>")
+		vim.command("nmap <silent> <enter> <enter>")
+		vim.command("set updatetime=500")
+		vim.command("autocmd CursorMoved,CursorMovedI * :call Sharelatex_update_pos()")
+		vim.command("autocmd CursorHold,CursorHoldI * :call Sharelatex_update_pos()")
+
 		#self.test = 1
 
 	def updateProject(self):
 		if None != self.project:
 			currentTime = time.time()
 
-			buf = self.convToString(vim.current.buffer)
-			buf = self.project.update(buf)
-			self.applyString(buf)
+			c = self.convToString(vim.current.buffer)
+			c = self.project.update(c)
+			self.applyString(c)
 			#print str(self.test)
 			op = self.getOpCodes()
 			if len(op) > 0:
 				message = self.project.sendOperations(op)
 				if message != None:
-					#self.project.serverBuffer[:] = vim.current.buffer[:]
 					self.project.serverBuffer = self.convToString(vim.current.buffer)
 			if self.lastUpdate + 0.300 < currentTime:
-				#self.project.update()
 				(row,column) = vimCursorPos()
 				self.project.updateCursor(row-1,column)
 				self.lastUpdate = currentTime
 
 	def getOpCodes(self):
-		b = vim.current.buffer
-		a = self.project.serverBuffer
-		b = self.convToString(b)
-		#a = self.convToString(a)
-		op = self.project.decodeOperations(a,b)
+		c = vim.current.buffer
+		c = self.convToString(c)
+		op = self.project.decodeOperations(c)
 		return op
 
 # ??? This class provides the interface between
@@ -299,6 +311,7 @@ class Document:
 		self.uniqueID = uniqueID
 		self.lastCommit = None
 		self.version = None
+		self.content = None
 
 class SharelatexProject:
 	def __init__(self,url,projectID):
@@ -330,7 +343,7 @@ class SharelatexProject:
 		r = self.ipc_session.waitfor("1::",10)
 		if r != "1::":
 			print "CLIENT: No valid response from ShareLaTex server"
-			#self.p.kill()	
+			self.p.kill()	
 			return
 
 		message = json.dumps({"name":"joinProject","args":[{"project_id":projectID}]})
@@ -348,7 +361,8 @@ class SharelatexProject:
 			self.ipc_session.send("5:" + str(self.command_counter) + "+::" + message_content)
 		elif message_type == "alive":
 			self.ipc_session.send("2::")
-	
+
+	# ??? Opens a document in the project
 	def openDoc(self,docID):
 		if self.currentDoc != None:
 			temp = json.dumps({"name":"leaveDoc","args":[self.currentDoc.uniqueID]})
@@ -362,35 +376,32 @@ class SharelatexProject:
 		
 		temp = json.loads(r[r.find("+")+1:len(r)])	
 		data = temp[1]
-
-		self.serverBuffer = data
+	
+		self.serverBuffer = self.toString(data)
 		self.currentDoc.version = temp[2]
+		
+		return self.serverBuffer
 
-		vimClearScreen()
-
-		# ??? Pushing document to vim
-		vim.command("syntax on")
-		vim.command("set filetype=tex")
-		for a in self.serverBuffer:
-			# !!! MUST HANDLE UTF8
-			if len(vim.current.buffer[0])>1:
-				vim.current.buffer.append(a)
-			else: 
-				vim.current.buffer[0] = a
-
-
-		# ??? Returning normal function to these buttons	
-		vim.command("nmap <silent> <up> <up>")
-		vim.command("nmap <silent> <down> <down>")
-		vim.command("nmap <silent> <enter> <enter>")
-		vim.command("set updatetime=500")
-		vim.command("autocmd CursorMoved,CursorMovedI * :call Sharelatex_update_pos()")
-		vim.command("autocmd CursorHold,CursorHoldI * :call Sharelatex_update_pos()")
-
+	# ??? Opens the root document in the project
 	def open_root_doc(self):
 		if self.rootDoc != None:
-			self.openDoc(self.rootDoc)
+			return self.openDoc(self.rootDoc)
 
+	# ??? Converts a list of strings into a single
+	# ??? string where the list entries are seperated
+	# ??? by the newline sequence.
+	def toString(self,b):
+		if b == None or len(b) == 0:
+			return u''
+		
+		s = u''
+		for line in b[0:len(b)-1]:
+			s += u''+line +"\n"
+
+		s += u''+b[len(b)-1]
+		s.replace("	","\t")
+
+		return s
 	
 	def get_char_number(self,row,column):
 		char_count = 0
@@ -445,7 +456,7 @@ class SharelatexProject:
 				return message
 			return None
 
-	def decodeOperations(self,a,b):
+	def decodeOperations(self,b):
 		#changeStart = None
 		#changeStop = None
 		#for i in range(0,len(a)):
@@ -455,7 +466,7 @@ class SharelatexProject:
 
 		#if changeStart != None:
 		#	for i in range(
-		
+		a = self.serverBuffer
 		s = difflib.SequenceMatcher(None,a,b)
 		deletes = 0
 		inserts = 0
@@ -488,74 +499,9 @@ class SharelatexProject:
 				
 		return op
 
-	def applyOperations(self,args,buf):
-		args = args[0]
-
-		if u'v' in args:
-			v = args[u'v']
-			if v >= self.currentDoc.version:
-				self.currentDoc.version = v+1
-				#self.serverBuffer = vim.current.buffer[:]
-
-		if not u'op' in args:
-			return buf
-		op = args[u'op']
-
-		for op in op:
-			# ??? Del char and lines
-			if u'd' in op:
-				p = op[u'p']
-				s = op[u'd']
-				(row,col) = self.get_char_pos(p)
-				row -= 1
-		
-				beforeDelete = buf[row][:col]
-				delText = s.split('\n')
-				length = len(delText)
-				if length > 1:	
-					deleteTo = len(delText[length-1])
-					afterDelete = buf[row+length-1][deleteTo:]
-					for index in range(1,length):
-						buf[row:] = buf[row+1:]
-				else:
-					afterDelete = ""
-		
-				if s.find("\n") >= 0:
-					#buf[row:] = buf[row+1:]
-					buf[row] = beforeDelete + afterDelete
-				else:
-					buf[row] = buf[row][:col] + buf[row][col+len(s):]
-
-			# ??? Add chars and newlines
-			if u'i' in op:
-				p = op[u'p']
-				s = op[u'i']
-				(row,col) = self.get_char_pos(p)
-				row -= 1
-				
-				beforeInsert = buf[row][:col]
-				afterInsert = buf[row][col:]
-
-				# ??? Tabbing
-				if s.find("\t") >= 0:
-					s = s.replace("\t","	")
-		
-				if s.find("\n") >= 0:
-					newText = s.split('\n')
-					insertBuffer = []
-					insertBuffer.append(beforeInsert + newText[0])
-					
-					for index in range(1,len(newText)-1):
-						insertBuffer.append(newText[index])
-					
-					insertBuffer.append(newText[len(newText)-1]+afterInsert)
-					buf[row:] = insertBuffer[:] + buf[row+1:]
-				else:
-					buf[row] = beforeInsert + s + afterInsert
-
-		return buf
-
-
+	# ??? Decodes the external updates recieved from
+	# ??? the server and applies the changes to the
+	# ??? given string.
 	def applyOperationsString(self,args,buf):
 		args = args[0]
 
@@ -601,10 +547,7 @@ class SharelatexProject:
 						version = data[u'v']
 						if version >= self.currentDoc.version:
 							self.currentDoc.version = version+1
-							#self.serverBuffer = vim.current.buffer[:]
-					#self.serverBuffer = self.applyOperations(args,self.serverBuffer)
 					self.serverBuffer = self.applyOperationsString(args,self.serverBuffer)
-					#vim.current.buffer = self.applyOperations(args,vim.current.buffer)
 					editorBuffer = self.applyOperationsString(args,editorBuffer)
 
 		return editorBuffer
@@ -634,4 +577,4 @@ elif cmd=="updatePos":
 elif cmd=="close":
 	plugin.project.ipc_session.kill()
 	print "ENDTIME"
-	#p.kill()
+	p.kill()
